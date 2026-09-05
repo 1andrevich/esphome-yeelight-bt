@@ -172,7 +172,3 @@ ancestor of both.
 [spec]: https://github.com/hcoohb/hass-yeelightbt
 [re]: https://github.com/Marcocanc/mi-lamp-re
 [orig]: https://github.com/rytilahti/python-yeelightbt
-
-## License
-
-MIT — see [LICENSE](LICENSE).
