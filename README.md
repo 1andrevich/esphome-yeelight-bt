@@ -52,7 +52,7 @@ not advertise.
 
 ```yaml
 external_components:
-  - source: github://Andrevich/esphome-yeelight-bt@main
+  - source: github://1andrevich/esphome-yeelight-bt@main
     components: [yeelight_bt]
 
 ble_client:
