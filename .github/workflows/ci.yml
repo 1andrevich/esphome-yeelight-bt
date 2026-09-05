@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile (${{ matrix.config }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Primary target.
+          - config: ci-esp32c6.yaml
+          # Catches ESPHome API drift the C6 build might not surface.
+          - config: ci-esp32.yaml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Cache PlatformIO and pip
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: ${{ runner.os }}-esphome-${{ matrix.config }}-${{ hashFiles('tests/*.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-esphome-${{ matrix.config }}-
+            ${{ runner.os }}-esphome-
+
+      - name: Install ESPHome
+        # Pinned: the esp32_ble_client API has churned and code written against
+        # one release does not necessarily compile against another.
+        run: pip install esphome==2026.8.1
+
+      - name: Show versions
+        run: esphome version
+
+      - name: Compile
+        working-directory: tests
+        run: esphome compile ${{ matrix.config }}
+
+  lint-python:
+    name: Lint component codegen
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Byte-compile
+        run: python -m compileall -q components tools

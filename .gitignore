@@ -1,0 +1,17 @@
+# ESPHome build output
+.esphome/
+tests/.esphome/
+secrets.yaml
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

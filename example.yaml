@@ -1,0 +1,88 @@
+# Minimal production configuration for the yeelight_bt external component.
+#
+# Hardware this was developed and tested on:
+#   Seeed XIAO ESP32-C6 + Yeelight Bedside Lamp (XMCTD_*)
+#   ESPHome 2026.8.1, ESP-IDF 5.5.5
+#
+# Before you start: get your lamp's MAC (see the README), and make sure the
+# Yeelight phone app is fully closed. The lamp accepts exactly one BLE
+# connection at a time and will not advertise while the app holds it.
+
+substitutions:
+  device_name: yeelight-bedside
+  # Your lamp's MAC. Compile-time only -- rebuild to point at a different lamp.
+  lamp_mac: "F8:24:41:XX:XX:XX"
+
+esphome:
+  name: ${device_name}
+  friendly_name: Yeelight Bedside Lamp
+
+esp32:
+  board: seeed_xiao_esp32c6
+  framework:
+    # The C6 has no Arduino framework in ESPHome; esp-idf is required.
+    type: esp-idf
+    version: 5.5.5
+
+external_components:
+  - source: github://Andrevich/esphome-yeelight-bt@main
+    components: [yeelight_bt]
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Wi-Fi and BLE share one radio on the C6. Turning power save off keeps the
+  # radio available for BLE and for the fallback AP.
+  power_save_mode: none
+  ap:
+    ssid: ${device_name}-setup
+    password: !secret ap_password
+
+captive_portal:
+
+esp32_ble_tracker:
+  # Defaults to true whenever wifi is configured; spelled out because it is the
+  # first thing to check if BLE connections drop.
+  software_coexistence: true
+
+ble_client:
+  - id: lamp_ble
+    mac_address: ${lamp_mac}
+
+light:
+  - platform: yeelight_bt
+    # `id` is the light entity. `output_id` is the component, and is what the
+    # yeelight_bt.* actions take.
+    id: bedside
+    output_id: bedside_lamp
+    name: "Bedside Lamp"
+    ble_client_id: lamp_ble
+    model: bedside # or: candela
+    poll_interval: 30s # 0s disables polling
+
+# First-time pairing needs a physical button press on the lamp. Exposing the
+# action means you do not have to reflash to re-pair.
+button:
+  - platform: template
+    name: "Pair Lamp"
+    on_press:
+      - yeelight_bt.pair:
+          id: bedside_lamp
+
+# Optional: browser control on port 80, useful without Home Assistant.
+# Costs roughly 40 kB of flash.
+#
+# web_server:
+#   port: 80
+#   version: 3

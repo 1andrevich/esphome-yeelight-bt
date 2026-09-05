@@ -1,0 +1,60 @@
+# Compile-only config for CI. No secrets, no real credentials.
+# Primary target: ESP32-C6 (Seeed XIAO), esp-idf framework.
+
+esphome:
+  name: ci-yeelight-c6
+
+esp32:
+  board: seeed_xiao_esp32c6
+  framework:
+    type: esp-idf
+    version: 5.5.5
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [yeelight_bt]
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "ci-ssid"
+  password: "ci-password"
+
+esp32_ble_tracker:
+  software_coexistence: true
+
+ble_client:
+  - id: lamp_ble
+    mac_address: "F8:24:41:11:22:33"
+
+light:
+  - platform: yeelight_bt
+    id: lamp_light
+    output_id: lamp
+    name: "CI Lamp"
+    ble_client_id: lamp_ble
+    model: bedside
+    poll_interval: 30s
+    on_paired:
+      - logger.log: "paired"
+
+button:
+  - platform: template
+    name: "CI Pair"
+    on_press:
+      - yeelight_bt.pair:
+          id: lamp
+  - platform: template
+    name: "CI Request State"
+    on_press:
+      - yeelight_bt.request_state:
+          id: lamp
+  - platform: template
+    name: "CI Send Raw"
+    on_press:
+      - yeelight_bt.send_raw:
+          id: lamp
+          data: [0x43, 0x40, 0x01, 0x01, 0xF4]
