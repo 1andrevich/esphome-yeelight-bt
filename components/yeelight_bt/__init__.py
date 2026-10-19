@@ -10,7 +10,7 @@ from esphome import automation
 import esphome.codegen as cg
 from esphome.components import ble_client, light
 
-CODEOWNERS = ["@radle"]
+CODEOWNERS = ["@1andrevich"]
 DEPENDENCIES = ["ble_client", "esp32"]
 
 yeelight_bt_ns = cg.esphome_ns.namespace("yeelight_bt")
