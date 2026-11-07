@@ -75,11 +75,16 @@ static const uint8_t MODE_COLOR = 0x01;
 static const uint8_t MODE_WHITE = 0x02;
 static const uint8_t MODE_FLOW = 0x03;
 
-static const uint16_t TEMP_MIN_KELVIN = 1700;
-static const uint16_t TEMP_MAX_KELVIN = 6500;
+/// Colour temperature sent when the RGB entity is set to white. hass-yeelightbt
+/// identifies 4080 K as the lamp's true neutral white.
+static const uint16_t WHITE_KELVIN = 4080;
+/// An RGB colour counts as white when every normalised channel is at least
+/// this, which absorbs rounding from hue/saturation clients and pickers.
+static const float WHITE_THRESHOLD = 0.95f;
 
-/// Ignore incoming state for this long after our own write, so the lamp
-/// echoing back what we just told it does not fight the frontend.
+/// Ignore incoming state for this long after our own control write, so the
+/// lamp echoing back what we just told it does not fight the frontend. A
+/// fresh state request is sent just after this window closes.
 static const uint32_t STATE_ECHO_GUARD_MS = 500;
 
 /// How long a pending "this came from the lamp" marker stays valid before it
@@ -162,6 +167,10 @@ class YeelightBTLight : public light::LightOutput, public Component, public ble_
   bool ready_for_commands_() const;
 
   static uint8_t scale_brightness_(float brightness);
+  /// 0..1 colour channel to 0..255.
+  static uint8_t to_byte_(float channel);
+  /// Commands that change what the lamp shows, and so trigger an echo.
+  static bool is_control_command_(uint8_t command);
 
   Model model_{Model::BEDSIDE};
   uint32_t poll_interval_{30000};
@@ -187,7 +196,10 @@ class YeelightBTLight : public light::LightOutput, public Component, public ble_
   PairState pair_state_{PairState::DISCONNECTED};
 
   std::deque<Frame> tx_queue_;
+  /// Any write; paces the queue.
   uint32_t last_write_{0};
+  /// Power/colour/brightness/temperature writes only; opens the echo guard.
+  uint32_t last_command_write_{0};
 
   // Last state reported by the lamp.
   bool lamp_on_{false};

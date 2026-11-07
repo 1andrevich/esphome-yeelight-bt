@@ -9,7 +9,7 @@ the device's native API.
     python tools/test_client.py --host yeelight-bedside.local --key <API_KEY> --list
     python tools/test_client.py --host ... --key ... --on --brightness 60
     python tools/test_client.py --host ... --key ... --rgb 255,80,0 --brightness 100
-    python tools/test_client.py --host ... --key ... --kelvin 2700 --brightness 40
+    python tools/test_client.py --host ... --key ... --rgb 255,255,255   # white LEDs
     python tools/test_client.py --host ... --key ... --off
     python tools/test_client.py --host ... --key ... --watch
 
@@ -45,7 +45,6 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--brightness", type=float, default=None, help="0-100")
     parser.add_argument("--rgb", default=None, help="R,G,B each 0-255")
-    parser.add_argument("--kelvin", type=int, default=None, help="1700-6500")
     parser.add_argument("--transition", type=float, default=None, help="transition length in seconds")
     return parser.parse_args()
 
@@ -110,7 +109,7 @@ async def main() -> None:
 
         if args.off:
             command["state"] = False
-        elif args.on or args.brightness is not None or args.rgb or args.kelvin:
+        elif args.on or args.brightness is not None or args.rgb:
             command["state"] = True
 
         if args.brightness is not None:
@@ -122,12 +121,6 @@ async def main() -> None:
             except ValueError:
                 raise SystemExit("--rgb wants three comma-separated numbers, e.g. 255,80,0")
             command["rgb"] = (red / 255.0, green / 255.0, blue / 255.0)
-
-        if args.kelvin:
-            if not 1700 <= args.kelvin <= 6500:
-                raise SystemExit("--kelvin must be between 1700 and 6500")
-            # The API speaks mireds.
-            command["color_temperature"] = 1_000_000 / args.kelvin
 
         if args.transition is not None:
             command["transition_length"] = args.transition

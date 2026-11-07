@@ -129,14 +129,27 @@ coalescing queued frames that share a command byte, so a dragged brightness
 slider collapses to one write.
 
 **Echo suppression.** The lamp reports state right after a write. Incoming state
-is ignored for 500 ms after any write of the component's own, and state pushed
-into the frontend is marked so it is not written straight back to the lamp.
+is ignored for 500 ms after any power, colour, brightness or temperature write,
+and state pushed into the frontend is marked so it is not written straight back
+to the lamp. State requests do not open that window, or every polled answer
+would be discarded. 600 ms after the last control write the component asks for
+state again, so the frontend reflects what the lamp actually did.
 
 **Notifications before commands.** No command is sent until
 `ESP_GATTC_REG_FOR_NOTIFY_EVT` arrives. Writing before the subscription
 completes is a silent failure. ESP-IDF writes the CCCD as part of
 `esp_ble_gattc_register_for_notify()`, so this component does not write the
 descriptor by hand — matching the in-tree `anova` and `am43` components.
+
+**RGB-only entity.** The Bedside light advertises the single ESPHome colour
+mode `RGB`. Offering `RGB` and `COLOR_TEMPERATURE` as separate modes left
+clients unable to reach colour: the ESPHome web UI only shows its colour
+picker while the light is already in RGB mode, and a call carrying both rgb
+and a colour temperature matches neither mode, so ESPHome drops the colour.
+A colour whose channels are all at least 95% of the brightest is treated as
+white and sent as `CMD_TEMP` at 4080 K, the temperature hass-yeelightbt
+identifies as the lamp's neutral white, so white uses the white LEDs rather
+than mixed RGB. The lamp's white mode reads back as RGB white.
 
 ## Open questions
 

@@ -2,7 +2,8 @@
 
 ESPHome external component for **Yeelight Bluetooth-only lamps** based on https://github.com/hcoohb/hass-yeelightbt.
  Talks to the lamp directly from an ESP32 over BLE GATT and exposes it as a native ESPHome
-`light` entity — full RGB, colour temperature and brightness.
+`light` entity — full RGB colour and brightness, with white on the lamp's own
+white LEDs.
 
 No cloud, Yeelight app or Home Assistant required. Works with HA as ESPHome entity,
 and equally well over the plain ESPHome native API.
@@ -16,11 +17,12 @@ ESP32, ESP32-C3, ESP32-S3, ESP32-C6, ESP32-C5 etc.
 Verified on a Yeelight Bedside Lamp Gen1 with a Seeed XIAO ESP32-C6:
 
 - pairing, including surviving a reboot without re-pairing
-- on/off, brightness, RGB colour, colour temperature
+- on/off, brightness
 - state readback from the lamp (verified for on/off)
 
-Not verified: Candela hardware (code paths exist, shipped untested), and state
-readback for colour and brightness specifically.
+Not verified: RGB colour since the light was changed to a single RGB mode,
+state readback for colour and brightness, and Candela hardware (code paths
+exist, shipped untested).
 
 | | Tested with |
 |---|---|
@@ -35,7 +37,7 @@ not compile.
 
 | Model | Advertised name | Capabilities |
 |---|---|---|
-| Bedside Lamp | `XMCTD_*` | RGB, colour temperature (1700–6500 K), brightness |
+| Bedside Lamp | `XMCTD_*` | RGB, brightness; white uses the white LEDs at 4080 K |
 | Candela | `yeelight_ms*` | Brightness only — **untested, no hardware available** |
 
 Out of scope: Wi-Fi Yeelight lamps (they use the LAN protocol and are already

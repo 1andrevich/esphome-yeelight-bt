@@ -2,6 +2,7 @@
 
 #ifdef USE_ESP32
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -66,8 +67,24 @@ void YeelightBTLight::loop() {
 
   Frame frame = this->tx_queue_.front();
   this->tx_queue_.pop_front();
-  this->write_frame_(frame);
+  const bool written = this->write_frame_(frame);
   this->last_write_ = now;
+
+  if (written && frame[0] == COMMAND_STX && is_control_command_(frame[1])) {
+    this->last_command_write_ = now;
+    // Read back what the lamp actually did once its echo window has passed,
+    // so the frontend shows the real state even if the lamp ignored the
+    // command. Every control write restarts the timeout, so a burst of
+    // writes is followed by a single read.
+    this->set_timeout("confirm", STATE_ECHO_GUARD_MS + 100, [this]() {
+      if (this->ready_for_commands_())
+        this->request_state();
+    });
+  }
+}
+
+bool YeelightBTLight::is_control_command_(uint8_t command) {
+  return command == CMD_POWER || command == CMD_RGB || command == CMD_BRIGHTNESS || command == CMD_TEMP;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,13 +105,21 @@ Frame YeelightBTLight::make_frame_(uint8_t command, std::initializer_list<uint8_
 }
 
 void YeelightBTLight::enqueue_(const Frame &frame) {
-  // Coalesce: a queued frame carrying the same command byte is superseded by
-  // the newer one, in place, so a dragged slider collapses to one write rather
-  // than flooding the lamp's GATT stack.
-  for (auto &queued : this->tx_queue_) {
-    if (queued[1] == frame[1]) {
-      queued = frame;
-      return;
+  // Coalesce: a newer frame supersedes any queued frame with the same command
+  // byte, so a dragged slider collapses to one write rather than flooding the
+  // lamp's GATT stack. CMD_RGB and CMD_TEMP supersede each other too, since
+  // each sets the lamp's whole colour state.
+  //
+  // The superseded frame is removed and the new one appended, not replaced in
+  // place: replacing in place could leave [RGB, TEMP] queued after a
+  // colour -> white -> colour sequence, ending the lamp in white.
+  const bool sets_colour = frame[1] == CMD_RGB || frame[1] == CMD_TEMP;
+  for (auto it = this->tx_queue_.begin(); it != this->tx_queue_.end();) {
+    const uint8_t queued = (*it)[1];
+    if (queued == frame[1] || (sets_colour && (queued == CMD_RGB || queued == CMD_TEMP))) {
+      it = this->tx_queue_.erase(it);
+    } else {
+      ++it;
     }
   }
 
@@ -378,8 +403,10 @@ void YeelightBTLight::parse_state_(const uint8_t *data) {
            brightness, this->lamp_temperature_);
 
   // Guard against feedback loops: the lamp echoes state right after our own
-  // write, and re-publishing that would fight whatever the user is dragging.
-  if (millis() - this->last_write_ < STATE_ECHO_GUARD_MS) {
+  // control write, and re-publishing that would fight whatever the user is
+  // dragging. Only control writes count -- the answer to our own
+  // CMD_GETSTATE always lands inside the window and must not be dropped.
+  if (millis() - this->last_command_write_ < STATE_ECHO_GUARD_MS) {
     ESP_LOGV(TAG, "Ignoring state echo within guard window");
     return;
   }
@@ -448,10 +475,12 @@ light::LightTraits YeelightBTLight::get_traits() {
   if (this->model_ == Model::CANDELA) {
     traits.set_supported_color_modes({light::ColorMode::BRIGHTNESS});
   } else {
-    traits.set_supported_color_modes({light::ColorMode::RGB, light::ColorMode::COLOR_TEMPERATURE});
-    // 1000000 / 6500K = 153 mireds, 1000000 / 1700K = 588 mireds
-    traits.set_min_mireds(153.0f);
-    traits.set_max_mireds(588.0f);
+    // RGB only. Advertising RGB and COLOR_TEMPERATURE as separate modes left
+    // clients unable to reach colour: the web UI only shows its colour picker
+    // while the light is already in RGB mode, and a call carrying both rgb and
+    // a temperature matches neither mode, so ESPHome drops the colour. White
+    // is still the lamp's own white LEDs -- see write_state().
+    traits.set_supported_color_modes({light::ColorMode::RGB});
   }
   return traits;
 }
@@ -497,34 +526,34 @@ void YeelightBTLight::write_state(light::LightState *state) {
     this->lamp_on_ = true;
   }
 
-  const uint8_t brightness = scale_brightness_(values.get_brightness());
-
-  switch (values.get_color_mode()) {
-    case light::ColorMode::COLOR_TEMPERATURE: {
-      const float mireds = clamp(values.get_color_temperature(), 153.0f, 588.0f);
-      uint16_t kelvin = (uint16_t) clamp((int) roundf(1000000.0f / mireds), (int) TEMP_MIN_KELVIN,
-                                         (int) TEMP_MAX_KELVIN);
-      // The lamp switches out of colour mode on its own when it receives a
-      // temperature write, so no explicit mode change is needed first.
-      this->enqueue_(this->make_frame_(CMD_TEMP, {(uint8_t) (kelvin >> 8), (uint8_t) (kelvin & 0xFF), brightness}));
-      break;
-    }
-
-    case light::ColorMode::RGB: {
-      // CMD_RGB carries brightness in its own payload, so an RGB change is a
-      // single write -- no separate CMD_BRIGHTNESS is required.
-      const uint8_t red = (uint8_t) clamp((int) roundf(values.get_red() * 255.0f), 0, 255);
-      const uint8_t green = (uint8_t) clamp((int) roundf(values.get_green() * 255.0f), 0, 255);
-      const uint8_t blue = (uint8_t) clamp((int) roundf(values.get_blue() * 255.0f), 0, 255);
-      this->enqueue_(this->make_frame_(CMD_RGB, {red, green, blue, 0x01, brightness}));
-      break;
-    }
-
-    default:
-      this->enqueue_(this->make_frame_(CMD_BRIGHTNESS, {brightness}));
-      break;
+  if (values.get_color_mode() != light::ColorMode::RGB) {
+    this->enqueue_(this->make_frame_(CMD_BRIGHTNESS, {scale_brightness_(values.get_brightness())}));
+    return;
   }
+
+  // ESPHome keeps RGB normalised (brightest channel = 1) and carries how
+  // bright the colour is separately in color_brightness, e.g. when a client
+  // sends a dim (128, 0, 0). The lamp has a single brightness, so fold both in.
+  const uint8_t brightness = scale_brightness_(values.get_brightness() * values.get_color_brightness());
+  const float red = values.get_red();
+  const float green = values.get_green();
+  const float blue = values.get_blue();
+
+  if (std::min({red, green, blue}) >= WHITE_THRESHOLD) {
+    // White. Mixed from the RGB LEDs it looks tinted and dim, so use the
+    // lamp's dedicated white LEDs instead. The lamp leaves colour mode on its
+    // own when it receives a temperature write.
+    this->enqueue_(this->make_frame_(CMD_TEMP, {(uint8_t) (WHITE_KELVIN >> 8), (uint8_t) (WHITE_KELVIN & 0xFF),
+                                                brightness}));
+    return;
+  }
+
+  // CMD_RGB carries brightness in its own payload, so an RGB change is a
+  // single write -- no separate CMD_BRIGHTNESS is required.
+  this->enqueue_(this->make_frame_(CMD_RGB, {to_byte_(red), to_byte_(green), to_byte_(blue), 0x01, brightness}));
 }
+
+uint8_t YeelightBTLight::to_byte_(float channel) { return (uint8_t) clamp((int) roundf(channel * 255.0f), 0, 255); }
 
 void YeelightBTLight::publish_remote_state_(bool on, uint8_t brightness) {
   if (this->light_state_ == nullptr)
@@ -541,14 +570,22 @@ void YeelightBTLight::publish_remote_state_(bool on, uint8_t brightness) {
     call.set_brightness(clamp((float) brightness / 100.0f, 0.01f, 1.0f));
 
     if (this->model_ != Model::CANDELA) {
+      // write_state() folds color_brightness into the lamp's single
+      // brightness, and that brightness comes back above. Reset it to 1 or a
+      // dim colour is applied twice: the web UI scales the colour it shows by
+      // color_brightness, while API clients such as Homey see only the
+      // normalised RGB, so the two disagree.
       if (this->lamp_mode_ == MODE_COLOR) {
         call.set_color_mode(light::ColorMode::RGB);
+        call.set_color_brightness(1.0f);
         call.set_rgb((float) this->lamp_red_ / 255.0f, (float) this->lamp_green_ / 255.0f,
                      (float) this->lamp_blue_ / 255.0f);
-      } else if (this->lamp_mode_ == MODE_WHITE && this->lamp_temperature_ > 0) {
-        const uint16_t kelvin = clamp(this->lamp_temperature_, TEMP_MIN_KELVIN, TEMP_MAX_KELVIN);
-        call.set_color_mode(light::ColorMode::COLOR_TEMPERATURE);
-        call.set_color_temperature(1000000.0f / (float) kelvin);
+      } else if (this->lamp_mode_ == MODE_WHITE) {
+        // The entity is RGB only, so the lamp's white mode shows as white;
+        // the lamp's own temperature is logged but not exposed.
+        call.set_color_mode(light::ColorMode::RGB);
+        call.set_color_brightness(1.0f);
+        call.set_rgb(1.0f, 1.0f, 1.0f);
       } else if (this->lamp_mode_ == MODE_FLOW) {
         ESP_LOGD(TAG, "Lamp is in flow mode; publishing power and brightness only");
       }
